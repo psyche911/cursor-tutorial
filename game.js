@@ -70,10 +70,16 @@ class Enemy {
         this.height = 30;
         this.row = row;
         this.alive = true;
+        this.health = 1;
+        this.maxHealth = 1;
     }
 
     draw(ctx) {
         if (!this.alive) return;
+        
+        // Draw with reduced opacity if damaged
+        const alpha = this.health < this.maxHealth ? 0.6 : 1.0;
+        ctx.globalAlpha = alpha;
         
         ctx.fillStyle = this.row === 0 ? '#f00' : this.row === 1 ? '#ff0' : '#0ff';
         // Draw alien shape
@@ -82,6 +88,8 @@ class Enemy {
         ctx.fillRect(this.x + 5, this.y + 5, 10, 10);
         ctx.fillRect(this.x + 25, this.y + 5, 10, 10);
         ctx.fillRect(this.x + 10, this.y + 20, 20, 5);
+        
+        ctx.globalAlpha = 1.0;
     }
 
     getBounds() {
@@ -100,7 +108,7 @@ class Enemy {
 }
 
 class Bullet {
-    constructor(x, y, direction) {
+    constructor(x, y, direction, damage = 1) {
         this.x = x;
         this.y = y;
         this.width = 4;
@@ -108,6 +116,7 @@ class Bullet {
         this.direction = direction; // 1 for up, -1 for down
         this.speed = direction === 1 ? BULLET_SPEED : ENEMY_BULLET_SPEED;
         this.active = true;
+        this.damage = damage;
     }
 
     update() {
@@ -119,8 +128,16 @@ class Bullet {
 
     draw(ctx) {
         if (!this.active) return;
-        ctx.fillStyle = this.direction === 1 ? '#0f0' : '#f00';
-        ctx.fillRect(this.x, this.y, this.width, this.height);
+        if (this.direction === 1) {
+            // Player bullet - different color if powered up
+            ctx.fillStyle = this.damage > 1 ? '#ff0' : '#0f0';
+            // Make powered-up bullets bigger
+            const size = this.damage > 1 ? 6 : 4;
+            ctx.fillRect(this.x - (size - this.width) / 2, this.y, size, this.height);
+        } else {
+            ctx.fillStyle = '#f00';
+            ctx.fillRect(this.x, this.y, this.width, this.height);
+        }
     }
 
     getBounds() {
@@ -130,6 +147,54 @@ class Bullet {
             width: this.width,
             height: this.height
         };
+    }
+}
+
+class Explosion {
+    constructor(x, y) {
+        this.x = x;
+        this.y = y;
+        this.particles = [];
+        this.lifetime = 0;
+        this.maxLifetime = 20;
+        
+        // Create particles
+        const particleCount = 15;
+        for (let i = 0; i < particleCount; i++) {
+            const angle = (Math.PI * 2 * i) / particleCount;
+            const speed = 2 + Math.random() * 3;
+            this.particles.push({
+                x: x,
+                y: y,
+                vx: Math.cos(angle) * speed,
+                vy: Math.sin(angle) * speed,
+                size: 3 + Math.random() * 4,
+                color: `hsl(${Math.random() * 60}, 100%, ${50 + Math.random() * 50}%)`
+            });
+        }
+    }
+    
+    update() {
+        this.lifetime++;
+        this.particles.forEach(particle => {
+            particle.x += particle.vx;
+            particle.y += particle.vy;
+            particle.vy += 0.2; // gravity
+            particle.size *= 0.95; // shrink
+        });
+    }
+    
+    draw(ctx) {
+        this.particles.forEach(particle => {
+            ctx.fillStyle = particle.color;
+            ctx.beginPath();
+            ctx.arc(particle.x, particle.y, particle.size, 0, Math.PI * 2);
+            ctx.fill();
+        });
+    }
+    
+    isDone() {
+        return this.lifetime >= this.maxLifetime;
     }
 }
 
@@ -224,6 +289,8 @@ class Game {
         this.enemySpeed = 1;
         this.lastEnemyShot = 0;
         this.enemyShotInterval = 2000;
+        this.powerUpActive = false;
+        this.explosions = [];
         
         this.init();
         this.setupEventListeners();
@@ -231,19 +298,30 @@ class Game {
 
     init() {
         this.player = new Player(CANVAS_WIDTH / 2 - 25, CANVAS_HEIGHT - 50);
+        // Set player speed based on power-up status
+        if (this.powerUpActive) {
+            this.player.speed = PLAYER_SPEED * 1.5;
+        }
         this.enemies = [];
         this.playerBullets = [];
         this.enemyBullets = [];
         this.barriers = [];
+        this.explosions = [];
         
         // Create enemies
         for (let row = 0; row < ENEMY_ROWS; row++) {
             for (let col = 0; col < ENEMY_COLS; col++) {
-                this.enemies.push(new Enemy(
+                const enemy = new Enemy(
                     ENEMY_START_X + col * ENEMY_SPACING,
                     ENEMY_START_Y + row * ENEMY_SPACING,
                     row
-                ));
+                );
+                // Enemies have more health when power-up is active
+                if (this.powerUpActive) {
+                    enemy.health = 2;
+                    enemy.maxHealth = 2;
+                }
+                this.enemies.push(enemy);
             }
         }
         
@@ -306,17 +384,22 @@ class Game {
         this.lives = 3;
         this.enemyDirection = 1;
         this.enemySpeed = 1;
+        this.powerUpActive = false;
         this.init();
+        // Reset player speed
+        this.player.speed = PLAYER_SPEED;
         this.startGame();
     }
 
     shoot() {
         // Only allow one bullet at a time for player
         if (this.playerBullets.length === 0) {
+            const damage = this.powerUpActive ? 2 : 1;
             this.playerBullets.push(new Bullet(
                 this.player.x + this.player.width / 2 - 2,
                 this.player.y,
-                1
+                1,
+                damage
             ));
         }
     }
@@ -406,14 +489,36 @@ class Game {
     }
 
     checkCollisions() {
+        // Check for power-up activation
+        if (this.score >= 100 && !this.powerUpActive) {
+            this.powerUpActive = true;
+            // Increase player speed
+            this.player.speed = PLAYER_SPEED * 1.5;
+            // Update existing enemies to have more health
+            this.enemies.forEach(enemy => {
+                if (enemy.alive) {
+                    enemy.health = 2;
+                    enemy.maxHealth = 2;
+                }
+            });
+        }
+        
         // Player bullets vs enemies
         this.playerBullets.forEach((bullet, bulletIndex) => {
             this.enemies.forEach(enemy => {
                 if (enemy.alive && checkCollision(bullet.getBounds(), enemy.getBounds())) {
-                    enemy.alive = false;
+                    enemy.health -= bullet.damage;
+                    if (enemy.health <= 0) {
+                        enemy.alive = false;
+                        // Create explosion
+                        this.explosions.push(new Explosion(
+                            enemy.x + enemy.width / 2,
+                            enemy.y + enemy.height / 2
+                        ));
+                        this.score += enemy.getPoints();
+                        this.scoreDisplay.textContent = `Score: ${this.score}`;
+                    }
                     bullet.active = false;
-                    this.score += enemy.getPoints();
-                    this.scoreDisplay.textContent = `Score: ${this.score}`;
                 }
             });
         });
@@ -463,6 +568,10 @@ class Game {
         this.updateBullets();
         this.enemyShoot();
         this.checkCollisions();
+        
+        // Update explosions
+        this.explosions.forEach(explosion => explosion.update());
+        this.explosions = this.explosions.filter(e => !e.isDone());
     }
 
     draw() {
@@ -478,11 +587,21 @@ class Game {
         this.enemyBullets.forEach(bullet => bullet.draw(this.ctx));
         this.barriers.forEach(barrier => barrier.draw(this.ctx));
 
+        // Draw explosions
+        this.explosions.forEach(explosion => explosion.draw(this.ctx));
+        
         // Draw UI
         this.ctx.fillStyle = '#0f0';
         this.ctx.font = '20px monospace';
         this.ctx.fillText(`Lives: ${this.lives}`, 10, 30);
         this.ctx.fillText(`Score: ${this.score}`, 10, 60);
+        
+        // Draw power-up indicator
+        if (this.powerUpActive) {
+            this.ctx.fillStyle = '#ff0';
+            this.ctx.font = '16px monospace';
+            this.ctx.fillText('POWER-UP ACTIVE!', 10, 90);
+        }
     }
 
     gameLoop() {
