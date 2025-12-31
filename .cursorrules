@@ -1,0 +1,12 @@
+# Visual Style Rules
+
+## Retro Green Aesthetic
+- ALWAYS use a retro, terminal/CRT-style green color scheme for all visual elements
+- Primary green color: #00ff00 or #0f0 (bright terminal green)
+- Background: #000 (black)
+- Use monospace fonts (Courier New, monospace, or similar retro terminal fonts)
+- Add green glow effects (text-shadow, box-shadow with green)
+- Maintain retro/80s terminal aesthetic in all UI elements
+- All text, borders, and visual effects should use green (#00ff00, #0f0, or variations)
+- Avoid modern flat design - prefer retro CRT/terminal styling
+
